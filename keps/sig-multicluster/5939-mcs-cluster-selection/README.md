@@ -1231,3 +1231,34 @@ Use this section if you need things from the project/SIG. Examples include a
 new subproject, repos requested, or GitHub details. Listing these here allows a
 SIG to get the process for these resources started right away.
 -->
+
+
+```yaml
+apiVersion: multicluster.x-k8s.io/v1beta1
+kind: ServiceImport
+metadata:
+  name: example
+spec:
+  clusterSelectorsFallbackPolicy: <AllClusters/None>
+  clusterSelectors:
+    - # ...  / First groups of clusters
+    - # ...  / Second groups of clusters
+    - # ... etc
+```
+
+dsdsd
+dsdsd
+dsds
+
+dsdsd
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: derived-xxxxxx
+  annotations:
+    # ...
+    service.cilium.io/cluster-affinity: "cluster1,cluster2|cluster1,cluster3|cluster5"
+spec: # ...
+```

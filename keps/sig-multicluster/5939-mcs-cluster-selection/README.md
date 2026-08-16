@@ -227,8 +227,8 @@ clusters. Currently, each entry supports only a `PropertySelector`. The selector
 is evaluated against `ClusterProperty` key/value pairs. The MCS implementation
 must publish the ordered results in
 `ServiceImport.status.clusterSelectorResults`. Consumers should evaluate the
-results in order and use the first one with available endpoints. If none has
-available endpoints, they should use all constituent clusters.
+results in order and use the first one with available endpoints by default. If
+none has available endpoints, they should use all constituent clusters.
 
 ### User Stories
 
@@ -547,7 +547,8 @@ list of previously computed results rather than publish a partial update.
 #### Consuming Cluster Selector Results
 
 Consumers that support cluster selection, such as the datapath of an MCS
-implementation or a Gateway API implementation, should follow this algorithm:
+implementation or a Gateway API implementation, must follow this algorithm by
+default:
 
 1. For each result in `status.clusterSelectorResults` (in order):
    1. Collect endpoints from the listed source clusters that are eligible for
@@ -562,6 +563,12 @@ Endpoint eligibility depends on the relevant port, protocol, and
 is implementation specific. Different traffic contexts may therefore select
 different preferred clusters.
 
+Consumers may use additional logic to advance to the next result, for example
+when there are too few endpoints or based on runtime metrics such as latency.
+However, such behavior must be explicitly enabled by the user for the affected
+Service because it may override the user's intent. (For example: does the user
+prefer certain clusters because they are faster or because they are cheaper?)
+
 When the selected clusters change, consumers that manage live traffic should
 make a best effort to avoid abrupt connection termination.
 
@@ -572,11 +579,12 @@ Cluster selection runs before Service-level `trafficDistribution` such as
 selected clusters.
 
 For now, `trafficDistribution` does not influence which result is chosen.
-Consumers should evaluate the results in order and use the first result that has
-at least one eligible endpoint that is ready or serving, even when none of those
-endpoints is in the consumer's zone. In other words, `trafficDistribution` never
-causes the next result to be considered. This interaction could be made
-configurable if relevant use cases emerge.
+By default, consumers must evaluate the results in order and use the first result
+that has at least one eligible endpoint that is ready or serving, even when none
+of those endpoints is in the consumer's zone. In other words,
+`trafficDistribution` never causes the next result to be considered. Separate
+implementation-specific logic may do so when explicitly enabled as described
+above.
 
 ### Reading ClusterProperties from Constituent Clusters
 

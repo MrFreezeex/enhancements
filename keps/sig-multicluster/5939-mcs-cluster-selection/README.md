@@ -81,7 +81,7 @@ SIG Architecture for cross-cutting KEPs).
   - [Risks and Mitigations](#risks-and-mitigations)
 - [Design Details](#design-details)
   - [API Overview](#api-overview)
-    - [Label Selector](#label-selector)
+    - [Property Selector](#property-selector)
     - [Validation](#validation)
   - [Cluster Selection Algorithm](#cluster-selection-algorithm)
     - [Resolving Cluster Selectors](#resolving-cluster-selectors)
@@ -162,9 +162,10 @@ adds an ordered `clusterSelectors` field to `ServiceExport` that lets users
 select subsets of constituent clusters based on
 [`ClusterProperty`][ClusterProperty] values.
 
-Each entry uses a standard Kubernetes `metav1.LabelSelector`, which may contain
-a special `@SameAsImporter@` value. The MCS implementation publishes the
-clusters matched by each selector in
+Each entry can use a `propertySelector` based on the standard
+`metav1.LabelSelector` type, except that `matchProperties` replaces `matchLabels`
+and it may contain a special `@SameAsImporter@` value. The MCS implementation
+publishes the clusters matched by each selector in
 `ServiceImport.status.clusterSelectorResults` so that consumers can act on them.
 
 ## Motivation
@@ -222,10 +223,9 @@ constituent clusters receive the same configuration. On a conflict, the oldest
 `ServiceExport` takes precedence.
 
 `clusterSelectors` is an ordered list whose entries select sets of preferred
-clusters. Currently, each entry supports only a standard Kubernetes
-`metav1.LabelSelector`, the same type used in `NetworkPolicy` and `Deployment`.
-The selector is evaluated against `ClusterProperty` key/value pairs. The MCS
-implementation must publish the ordered results in
+clusters. Currently, each entry supports only a `PropertySelector`. The selector
+is evaluated against `ClusterProperty` key/value pairs. The MCS implementation
+must publish the ordered results in
 `ServiceImport.status.clusterSelectorResults`. Consumers should evaluate the
 results in order and use the first one with available endpoints. If none has
 available endpoints, they should use all constituent clusters.
@@ -252,10 +252,10 @@ spec:
             values:
               - "@SameAsImporter@"
     - propertySelector:
-        matchLabels:
+        matchProperties:
           region.topology.k8s.io: "@SameAsImporter@"
     - propertySelector:
-        matchLabels:
+        matchProperties:
           continent.topology.k8s.io: "@SameAsImporter@"
 ```
 
@@ -276,10 +276,10 @@ spec:
             values:
               - "@SameAsImporter@"
     - propertySelector:
-        matchLabels:
+        matchProperties:
           region.topology.k8s.io: "@SameAsImporter@"
     - propertySelector:
-        matchLabels:
+        matchProperties:
           continent.topology.k8s.io: "@SameAsImporter@"
 status:
   clusters:
@@ -322,12 +322,12 @@ spec:
   clusterSelectors:
     # Same continent with high-end GPU
     - propertySelector:
-        matchLabels:
+        matchProperties:
           continent.topology.k8s.io: "@SameAsImporter@"
           gpu-tier.mycompany.com: "high"
     # Same continent with any GPU
     - propertySelector:
-        matchLabels:
+        matchProperties:
           continent.topology.k8s.io: "@SameAsImporter@"
         matchExpressions:
           - key: gpu-tier.mycompany.com
@@ -353,6 +353,9 @@ A future revision may add selection criteria beyond `propertySelector`, such as
 CEL expressions or externally driven selection. For now, `ServiceExport`
 supports only inline selection through `propertySelector` and `ClusterProperty`
 data.
+
+A dedicated `PropertySelector` type avoids confusion with selectors over
+`ClusterProfile` labels and leaves room to add such selectors in the future.
 
 Any future criteria would be mutually exclusive within each entry. Different
 entries could use different criteria. Evaluation would remain ordered.
@@ -420,14 +423,36 @@ The `ClusterSelector` type is defined as follows:
 // ClusterSelector selects a set of clusters.
 type ClusterSelector struct {
     // PropertySelector selects clusters by matching ClusterProperty
-    // key/value pairs using standard label selector semantics.
-    // The special value "@SameAsImporter@" may appear in matchLabels values.
-    // It may also appear in matchExpressions values when the operator is In
-    // or NotIn. It means "use the same value as the importing cluster for
+    // key/value pairs. The special value "@SameAsImporter@" may appear in
+    // matchProperties values or matchExpressions values when the operator is
+    // In or NotIn. It means "use the same value as the importing cluster for
     // this key."
     // +required
-    PropertySelector *metav1.LabelSelector `json:"propertySelector"`
+    PropertySelector *PropertySelector `json:"propertySelector"`
 }
+
+// PropertySelector is a property query over a set of clusters. The results of
+// matchProperties and matchExpressions are ANDed. An empty PropertySelector is
+// invalid.
+// +structType=atomic
+type PropertySelector struct {
+    // MatchProperties is a map of ClusterProperty key/value pairs. A single
+    // key/value pair is equivalent to an element of matchExpressions whose key
+    // field is the map key, operator is In, and values contains only the map
+    // value. The requirements are ANDed.
+    // +optional
+    MatchProperties map[string]string `json:"matchProperties,omitempty"`
+
+    // MatchExpressions is a list of ClusterProperty selector requirements. The
+    // requirements are ANDed.
+    // +optional
+    // +listType=atomic
+    MatchExpressions []PropertySelectorRequirement `json:"matchExpressions,omitempty"`
+}
+
+// PropertySelectorRequirement and PropertySelectorOperator mirror the fields
+// and operators of their metav1 equivalents. Their definitions are omitted
+// here for brevity.
 ```
 
 The `ServiceImport.status` gains a `clusterSelectorResults` field. The MCS
@@ -468,17 +493,17 @@ Note that `observedGeneration` is intended for debugging status freshness.
 Consumers should treat the current `clusterSelectorResults` value as effective
 even when `observedGeneration` lags `metadata.generation`.
 
-#### Label Selector
+#### Property Selector
 
-`propertySelector` uses a standard Kubernetes `metav1.LabelSelector`, as in
-`NetworkPolicy`, `Deployment`, and similar APIs. The selector is evaluated
-against each constituent cluster's `ClusterProperty` key/value pairs. Both
-`matchLabels` and `matchExpressions` are supported.
+`PropertySelector` is based on `metav1.LabelSelector`, except that
+`matchProperties` replaces `matchLabels`. It uses the same operators and
+matching semantics, but is evaluated against `ClusterProperty` key/value pairs
+rather than object labels.
 
-The special value `@SameAsImporter@` may appear in `matchLabels` values. It may
-also appear in `matchExpressions` values when the operator is `In` or `NotIn`.
-During evaluation, it is replaced with the importing cluster's value for that
-key. If the importing cluster does not have that property, the selector matches
+The special value `@SameAsImporter@` may appear in `matchProperties` or
+`matchExpressions` values when the operator is `In` or `NotIn`. During
+evaluation, it is replaced with the importing cluster's value for that key.
+If the importing cluster does not have that property, the selector matches
 no clusters. As with `trafficDistribution`, users can say "prefer clusters in
 the same region as me" without hard-coding a specific region. Every
 `ServiceExport` for the service can use the same configuration.
@@ -491,6 +516,13 @@ without resolving the placeholder themselves.
 
 An empty `propertySelector` is invalid. In that case, the `ServiceExport` must
 receive a `Valid` condition with status `False` and reason
+`InvalidClusterSelector`.
+
+Otherwise, `PropertySelector` follows the validation of `metav1.LabelSelector`
+with two differences: keys must be valid `ClusterProperty` resource names, and
+values are not restricted to Kubernetes label-value syntax. Invalid selectors
+must either be rejected by API validation or reported on the `ServiceExport`
+with a `Valid` condition with status `False` and reason
 `InvalidClusterSelector`.
 
 If future selection criteria are added, each entry must still specify exactly
@@ -579,10 +611,9 @@ type PreparedSelector[T Cluster] interface {
 
 // PrepareSelector compiles a ClusterSelector for the given importer.
 // It resolves any @SameAsImporter@ placeholders using the importer's
-// properties. It then parses the label selector with the standard Kubernetes
-// LabelSelectorAsSelector function. The returned PreparedSelector is bound to
-// the importer's current properties and can be reused across evaluations. The
-// caller must call PrepareSelector again when those properties change.
+// properties. The returned PreparedSelector is bound to the importer's current
+// properties and can be reused across evaluations. The caller must call
+// PrepareSelector again when those properties change.
 func PrepareSelector[T Cluster](selector ClusterSelector, importer T) (PreparedSelector[T], error)
 ```
 
@@ -1079,8 +1110,8 @@ Major milestones might include:
 
 ## Drawbacks
 
-`@SameAsImporter@` overloads standard `metav1.LabelSelector` values. This is an
-unusual pattern in the Kubernetes ecosystem. The About API (KEP-2149) places no
+`@SameAsImporter@` overloads `PropertySelector` values. This is an unusual
+pattern in the Kubernetes ecosystem. The About API (KEP-2149) places no
 character restrictions on general `ClusterProperty` values. As a result, a
 literal property value of `@SameAsImporter@` would be indistinguishable from the
 placeholder. Such a collision is unlikely in practice. The convenience for
